@@ -1,0 +1,265 @@
+package org.anonymous.msrefactor.quizzes
+
+import com.fasterxml.jackson.databind.ObjectMapper
+import io.github.resilience4j.retry.RetryRegistry
+import org.mockito.Mockito
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.cloud.stream.function.StreamBridge
+import org.springframework.context.ApplicationContext
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.PropertySource
+import org.anonymous.msrefactor.ms.aggregate.AggregateIdGeneratorService
+import org.anonymous.msrefactor.ms.aggregate.EventApplicationService
+import org.anonymous.msrefactor.ms.impairment.ImpairmentService
+import org.anonymous.msrefactor.ms.messaging.MessagingObjectMapperProvider
+import org.anonymous.msrefactor.ms.messaging.local.LocalCommandGateway
+import org.anonymous.msrefactor.ms.messaging.local.LocalCommandService
+import org.anonymous.msrefactor.ms.messaging.stream.CommandResponseAggregator
+import org.anonymous.msrefactor.ms.messaging.stream.StreamCommandGateway
+import org.anonymous.msrefactor.ms.monitoring.TraceService
+import org.anonymous.msrefactor.ms.notification.EventService
+import org.anonymous.msrefactor.ms.transaction.sagas.messaging.SagaCommandHandler
+import org.anonymous.msrefactor.ms.transaction.sagas.unitOfWork.SagaUnitOfWorkService
+import org.anonymous.msrefactor.ms.versioning.CentralizedVersionService
+import org.anonymous.msrefactor.ms.versioning.IVersionService
+import org.anonymous.msrefactor.ms.versioning.VersionCommandHandler
+import org.anonymous.msrefactor.ms.versioning.VersionServiceClient
+import org.anonymous.msrefactor.quizzes.microservices.answer.aggregate.sagas.factories.SagasQuizAnswerFactory
+import org.anonymous.msrefactor.quizzes.microservices.answer.aggregate.sagas.repositories.QuizAnswerCustomRepositorySagas
+import org.anonymous.msrefactor.quizzes.microservices.answer.coordination.eventProcessing.QuizAnswerEventProcessing
+import org.anonymous.msrefactor.quizzes.microservices.answer.coordination.functionalities.QuizAnswerFunctionalities
+import org.anonymous.msrefactor.quizzes.microservices.answer.messaging.AnswerCommandHandler
+import org.anonymous.msrefactor.quizzes.microservices.answer.notification.handling.QuizAnswerEventHandling
+import org.anonymous.msrefactor.quizzes.microservices.answer.service.QuizAnswerService
+import org.anonymous.msrefactor.quizzes.microservices.course.aggregate.sagas.factories.SagasCourseFactory
+import org.anonymous.msrefactor.quizzes.microservices.course.aggregate.sagas.repositories.CourseCustomRepositorySagas
+import org.anonymous.msrefactor.quizzes.microservices.course.coordination.functionalities.CourseFunctionalities
+import org.anonymous.msrefactor.quizzes.microservices.course.messaging.CourseCommandHandler
+import org.anonymous.msrefactor.quizzes.microservices.course.service.CourseService
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.CourseExecutionRepository
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.sagas.factories.SagasCourseExecutionFactory
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.sagas.repositories.CourseExecutionCustomRepositorySagas
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.eventProcessing.ExecutionEventProcessing
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.functionalities.ExecutionFunctionalities
+import org.anonymous.msrefactor.quizzes.microservices.execution.messaging.ExecutionCommandHandler
+import org.anonymous.msrefactor.quizzes.microservices.execution.notification.handling.CourseExecutionEventHandling
+import org.anonymous.msrefactor.quizzes.microservices.execution.service.ExecutionService
+import org.anonymous.msrefactor.quizzes.microservices.user.aggregate.UserRepository
+import org.anonymous.msrefactor.quizzes.microservices.user.aggregate.sagas.factories.SagasUserFactory
+import org.anonymous.msrefactor.quizzes.microservices.user.coordination.functionalities.UserFunctionalities
+import org.anonymous.msrefactor.quizzes.microservices.user.messaging.UserCommandHandler
+import org.anonymous.msrefactor.quizzes.microservices.user.service.UserService
+
+@TestConfiguration
+@PropertySource("classpath:application-test.properties")
+class BeanConfigurationSagas {
+    @Bean
+    AggregateIdGeneratorService aggregateIdGeneratorService() {
+        return new AggregateIdGeneratorService()
+    }
+
+    @Bean
+    IVersionService versionService(LocalCommandGateway commandGateway) {
+        return new VersionServiceClient(commandGateway)
+    }
+
+    @Bean
+    CentralizedVersionService centralizedVersionService() {
+        return new CentralizedVersionService()
+    }
+
+    @Bean
+    EventApplicationService eventApplicationService() {
+        return new EventApplicationService()
+    }
+
+    @Bean
+    EventService eventService() {
+        return new EventService()
+    }
+
+    @Bean
+    SagaUnitOfWorkService unitOfWorkService() {
+        return new SagaUnitOfWorkService()
+    }
+
+    @Bean
+    ExecutionFunctionalities executionFunctionalities() {
+        return new ExecutionFunctionalities()
+    }
+
+    @Bean
+    ExecutionEventProcessing executionEventProcessing() {
+        return new ExecutionEventProcessing()
+    }
+
+    @Bean
+    UserFunctionalities userFunctionalities() {
+        return new UserFunctionalities()
+    }
+
+    @Bean
+    CourseFunctionalities courseFunctionalities() {
+        return new CourseFunctionalities()
+    }
+
+    @Bean
+    QuizAnswerFunctionalities answerFunctionalities() {
+        return new QuizAnswerFunctionalities()
+    }
+
+    @Bean
+    QuizAnswerEventProcessing answerEventProcessing() {
+        return new QuizAnswerEventProcessing()
+    }
+
+    @Bean
+    CourseCustomRepositorySagas courseCustomRepositorySagas() {
+        return new CourseCustomRepositorySagas()
+    }
+
+    @Bean
+    CourseExecutionCustomRepositorySagas courseExecutionCustomRepositorySagas() {
+        return new CourseExecutionCustomRepositorySagas()
+    }
+
+    @Bean
+    QuizAnswerCustomRepositorySagas quizAnswerCustomRepositorySagas() {
+        return new QuizAnswerCustomRepositorySagas()
+    }
+
+    @Bean
+    SagasQuizAnswerFactory sagasQuizAnswerFactory() {
+        return new SagasQuizAnswerFactory()
+    }
+
+    @Bean
+    SagasCourseFactory sagasCourseFactory() {
+        return new SagasCourseFactory()
+    }
+
+    @Bean
+    SagasCourseExecutionFactory sagasCourseExecutionFactory() {
+        return new SagasCourseExecutionFactory()
+    }
+
+    @Bean
+    SagasUserFactory sagasUserFactory() {
+        return new SagasUserFactory()
+    }
+
+    @Bean
+    CourseService courseService(SagaUnitOfWorkService unitOfWorkService, CourseCustomRepositorySagas courseRepository) {
+        return new CourseService(unitOfWorkService, courseRepository)
+    }
+
+    @Bean
+    QuizAnswerService answerService(SagaUnitOfWorkService unitOfWorkService, QuizAnswerCustomRepositorySagas quizAnswerRepository) {
+        return new QuizAnswerService(unitOfWorkService, quizAnswerRepository)
+    }
+
+    @Bean
+    ExecutionService executionService(SagaUnitOfWorkService unitOfWorkService, CourseExecutionRepository courseExecutionRepository, CourseExecutionCustomRepositorySagas courseExecutionCustomRepository) {
+        return new ExecutionService(unitOfWorkService, courseExecutionRepository, courseExecutionCustomRepository)
+    }
+
+    @Bean
+    UserService userService(SagaUnitOfWorkService unitOfWorkService, UserRepository userRepository) {
+        return new UserService(unitOfWorkService, userRepository)
+    }
+
+    @Bean
+    CourseExecutionEventHandling courseExecutionEventDetection() {
+        return new CourseExecutionEventHandling()
+    }
+
+    @Bean
+    QuizAnswerEventHandling answerEventDetection() {
+        return new QuizAnswerEventHandling()
+    }
+
+    @Bean
+    ImpairmentService ImpairmentService() {
+        return new ImpairmentService()
+    }
+
+    @Bean
+    RetryRegistry retryRegistry() {
+        return RetryRegistry.ofDefaults()
+    }
+
+    @Bean
+    MessagingObjectMapperProvider messagingObjectMapperProvider() {
+        return new MessagingObjectMapperProvider(new ObjectMapper().findAndRegisterModules())
+    }
+
+    @Bean
+    LocalCommandService localCommandService(ApplicationContext applicationContext, MessagingObjectMapperProvider mapperProvider) {
+        return new LocalCommandService(applicationContext, mapperProvider)
+    }
+
+    @Bean
+    LocalCommandGateway commandGateway(ApplicationContext applicationContext, RetryRegistry registry, LocalCommandService localCommandService, MessagingObjectMapperProvider mapperProvider) {
+        return new LocalCommandGateway(applicationContext, registry, localCommandService, mapperProvider)
+    }
+
+    @Bean
+    StreamBridge streamBridge() {
+        def mock = Mockito.mock(StreamBridge.class)
+        Mockito.when(mock.send(Mockito.anyString(), Mockito.any())).thenReturn(true)
+        return mock
+    }
+
+    @Bean
+    CommandResponseAggregator commandResponseAggregator() {
+        return new CommandResponseAggregator()
+    }
+
+
+    @Bean
+    StreamCommandGateway streamCommandGateway(LocalCommandGateway commandGateway) {
+        def mock = Mockito.mock(StreamCommandGateway.class)
+
+        // Delegate basic send(command) to the in-memory CommandGateway
+        Mockito.when(mock.send(Mockito.any())).thenAnswer(inv -> commandGateway.send(inv.getArgument(0)))
+
+        return mock
+    }
+
+    @Bean
+    TraceService TraceService() {
+        return new TraceService()
+    }
+
+    // Command Handlers
+    @Bean
+    SagaCommandHandler sagaCommandHandler() {
+        return new SagaCommandHandler()
+    }
+
+    @Bean
+    VersionCommandHandler versionCommandHandler() {
+        return new VersionCommandHandler()
+    }
+
+    @Bean
+    UserCommandHandler userCommandHandler() {
+        return new UserCommandHandler()
+    }
+
+    @Bean
+    ExecutionCommandHandler executionCommandHandler() {
+        return new ExecutionCommandHandler()
+    }
+
+    @Bean
+    CourseCommandHandler courseCommandHandler() {
+        return new CourseCommandHandler()
+    }
+
+    @Bean
+    AnswerCommandHandler answerCommandHandler() {
+        return new AnswerCommandHandler()
+    }
+
+}

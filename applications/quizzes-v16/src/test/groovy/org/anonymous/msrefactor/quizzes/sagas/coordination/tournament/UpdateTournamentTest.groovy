@@ -1,0 +1,313 @@
+package org.anonymous.msrefactor.quizzes.sagas.coordination.tournament
+
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
+import org.springframework.boot.test.context.TestConfiguration
+import org.anonymous.msrefactor.ms.exception.SimulatorErrorMessage
+import org.anonymous.msrefactor.ms.exception.SimulatorException
+import org.anonymous.msrefactor.ms.messaging.local.LocalCommandGateway
+import org.anonymous.msrefactor.ms.transaction.sagas.aggregate.GenericSagaState
+import org.anonymous.msrefactor.ms.transaction.sagas.unitOfWork.SagaUnitOfWorkService
+import org.anonymous.msrefactor.ms.utils.DateHandler
+import org.anonymous.msrefactor.quizzes.BeanConfigurationSagas
+import org.anonymous.msrefactor.quizzes.QuizzesSpockTest
+import org.anonymous.msrefactor.quizzes.microservices.exception.QuizzesErrorMessage
+import org.anonymous.msrefactor.quizzes.microservices.exception.QuizzesException
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.CourseExecutionDto
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.functionalities.ExecutionFunctionalities
+import org.anonymous.msrefactor.quizzes.microservices.question.aggregate.QuestionDto
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.QuizDto
+import org.anonymous.msrefactor.quizzes.microservices.topic.aggregate.TopicDto
+import org.anonymous.msrefactor.quizzes.microservices.topic.service.TopicService
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.Tournament
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.sagas.SagaExecution
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.TournamentDto
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.sagas.UpdateTournamentFunctionalitySagas
+import org.anonymous.msrefactor.quizzes.microservices.execution.service.ExecutionService
+import org.anonymous.msrefactor.quizzes.microservices.user.aggregate.UserDto
+
+@DataJpaTest
+class UpdateTournamentTest extends QuizzesSpockTest {
+    @Autowired
+    private SagaUnitOfWorkService unitOfWorkService
+
+    @Autowired
+    private ExecutionFunctionalities courseExecutionFunctionalities
+    @Autowired
+    private ExecutionFunctionalities quizFunctionalities
+    @Autowired
+    private ExecutionFunctionalities tournamentFunctionalities
+
+    @Autowired
+    private ExecutionService tournamentService
+    @Autowired
+    private TopicService topicService
+    @Autowired
+    private LocalCommandGateway commandGateway;
+
+    private CourseExecutionDto courseExecutionDto
+    private UserDto userCreatorDto, userDto
+    private TopicDto topicDto1, topicDto2, topicDto3
+    private QuestionDto questionDto1, questionDto2, questionDto3
+    private TournamentDto tournamentDto
+
+    def unitOfWork1
+
+    def setup() {
+        given: 'a course execution'
+        courseExecutionDto = createCourseExecution(COURSE_EXECUTION_NAME, COURSE_EXECUTION_TYPE, COURSE_EXECUTION_ACRONYM, COURSE_EXECUTION_ACADEMIC_TERM, TIME_4)
+
+        and: 'a user to enroll in the course execution'
+        userCreatorDto = createUser(USER_NAME_1, USER_USERNAME_1, STUDENT_ROLE)
+        courseExecutionFunctionalities.addStudent(courseExecutionDto.getAggregateId(), userCreatorDto.getAggregateId())
+
+        and: 'another user to enroll in the course execution'
+        userDto = createUser(USER_NAME_2, USER_USERNAME_2, STUDENT_ROLE)
+        courseExecutionFunctionalities.addStudent(courseExecutionDto.aggregateId, userDto.aggregateId)
+
+        and: 'three topics'
+        topicDto1 = createTopic(courseExecutionDto, TOPIC_NAME_1)
+        topicDto2 = createTopic(courseExecutionDto, TOPIC_NAME_2)
+        topicDto3 = createTopic(courseExecutionDto, TOPIC_NAME_3)
+
+        and: 'three questions'
+        questionDto1 = createQuestion(courseExecutionDto, new HashSet<>(Arrays.asList(topicDto1)), TITLE_1, CONTENT_1, OPTION_1, OPTION_2)
+        questionDto2 = createQuestion(courseExecutionDto, new HashSet<>(Arrays.asList(topicDto2)), TITLE_2, CONTENT_2, OPTION_3, OPTION_4)
+        questionDto3 = createQuestion(courseExecutionDto, new HashSet<>(Arrays.asList(topicDto3)), TITLE_3, CONTENT_3, OPTION_1, OPTION_3)
+
+        and: 'a tournament where the first user is the creator'
+        tournamentDto = createTournament(TIME_1, TIME_3, 2, userCreatorDto.getAggregateId(),  courseExecutionDto.getAggregateId(), [topicDto1.getAggregateId(),topicDto2.getAggregateId()])
+
+        and: 'a unit of work'
+        def functionalityName1 = UpdateTournamentFunctionalitySagas.class.getSimpleName()
+        unitOfWork1 = unitOfWorkService.createUnitOfWork(functionalityName1)
+    }
+
+    def cleanup() {}
+
+    def "only run setup"() {
+        expect:
+        true // or just leave it blank if using Spock 2+
+    }
+
+    def 'update tournament successfully'() {
+        given:
+        tournamentDto.setStartTime(DateHandler.toISOString(TIME_2))
+        tournamentDto.setEndTime(DateHandler.toISOString(TIME_4))
+        tournamentDto.setNumberOfQuestions(3)
+        def topicsAggregateIds = [topicDto1.getAggregateId(), topicDto2.getAggregateId(), topicDto3.getAggregateId()].toSet()
+
+        when:
+        tournamentFunctionalities.updateTournament(tournamentDto, topicsAggregateIds)
+
+        then:
+        def updatedTournamentDto = tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+        updatedTournamentDto != null
+        updatedTournamentDto.startTime == DateHandler.toISOString(TIME_2)
+        updatedTournamentDto.endTime == DateHandler.toISOString(TIME_4)
+        updatedTournamentDto.numberOfQuestions == 3
+        updatedTournamentDto.topics*.aggregateId.toSet() == [topicDto1.getAggregateId(), topicDto2.getAggregateId(), topicDto3.getAggregateId()].toSet()
+        def quizDto = quizFunctionalities.findQuiz(updatedTournamentDto.quiz.aggregateId)
+        quizDto.availableDate == DateHandler.toISOString(TIME_2)
+        quizDto.conclusionDate == DateHandler.toISOString(TIME_4)
+        quizDto.questionDtos.size() == 3
+    }
+
+    def 'update tournament aborts when trying to create the tournament and violates an invariant'() {
+        given:
+        tournamentDto.setStartTime(DateHandler.toISOString(TIME_2))
+        tournamentDto.setEndTime(DateHandler.toISOString(TIME_1))
+        tournamentDto.setNumberOfQuestions(3)
+        def topicsAggregateIds = [topicDto1.getAggregateId(), topicDto2.getAggregateId(), topicDto3.getAggregateId()].toSet()
+
+        when:
+        tournamentFunctionalities.updateTournament(tournamentDto, topicsAggregateIds)
+
+        then:
+        def error = thrown(SimulatorException)
+        error.errorMessage == SimulatorErrorMessage.INVARIANT_BREAK
+        and: 'tournament is not changed'
+        def updatedTournamentDto = (TournamentDto) tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+        updatedTournamentDto.numberOfQuestions == 2
+        updatedTournamentDto.topics*.aggregateId.toSet() == [topicDto1.getAggregateId(),topicDto2.getAggregateId()].toSet()
+        and: 'saga sate is undone'
+        sagaStateOf(courseExecutionDto.aggregateId) == GenericSagaState.NOT_IN_SAGA // tournament is a member; the lock lives on the owning execution
+    }
+
+    def 'update tournament aborts when trying to create a quiz and there are not enough questions'() {
+        given:
+        tournamentDto.setNumberOfQuestions(4)
+        def topicsAggregateIds = [topicDto1.getAggregateId(), topicDto2.getAggregateId(), topicDto3.getAggregateId()].toSet()
+
+        when:
+        tournamentFunctionalities.updateTournament(tournamentDto, topicsAggregateIds)
+
+        then:
+        def error = thrown(QuizzesException)
+        error.errorMessage == QuizzesErrorMessage.NOT_ENOUGH_QUESTIONS
+        and: 'compensation is executed'
+        def updatedTournamentDto = (TournamentDto) tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+        updatedTournamentDto.numberOfQuestions == 2
+        updatedTournamentDto.topics*.aggregateId.toSet() == [topicDto1.getAggregateId(),topicDto2.getAggregateId()].toSet()
+        and: 'saga sate is undone'
+        sagaStateOf(courseExecutionDto.aggregateId) == GenericSagaState.NOT_IN_SAGA // tournament is a member; the lock lives on the owning execution
+        and: 'quiz is not changed'
+        def quizDto = (QuizDto) quizFunctionalities.findQuiz(updatedTournamentDto.quiz.aggregateId)
+        quizDto.questionDtos.size() == 2
+        sagaStateOf(quizDto.courseExecutionAggregateId) == GenericSagaState.NOT_IN_SAGA
+    }
+
+    def 'concurrent update of tournament' () {
+        given: 'one update'
+        tournamentDto.setNumberOfQuestions(1)
+        def topicsAggregateIds = [topicDto3.getAggregateId()].toSet()
+        and: 'another update'
+        def tournamentDto2 = new TournamentDto()
+        tournamentDto2.aggregateId = tournamentDto.aggregateId
+        tournamentDto2.setStartTime(DateHandler.toISOString(TIME_2))
+        tournamentDto2.setEndTime(DateHandler.toISOString(TIME_4))
+        and: 'the first execution occurs until getTopicsStep'
+        def updateTournamentFunctionalityOne = new UpdateTournamentFunctionalitySagas(unitOfWorkService, tournamentService, tournamentDto, topicsAggregateIds, unitOfWork1, commandGateway)
+        updateTournamentFunctionalityOne.executeUntilStep('getTopicsStep', unitOfWork1)
+
+        when: 'the second execution occurs'
+        tournamentFunctionalities.updateTournament(tournamentDto2, topicsAggregateIds)
+        then:
+        def error = thrown(SimulatorException)
+        error.errorMessage == SimulatorErrorMessage.AGGREGATE_BEING_USED_IN_OTHER_SAGA
+
+        when: 'first functionality finishes'
+        updateTournamentFunctionalityOne.resumeWorkflow(unitOfWork1)
+        then: 'the tournament topics are updated and it refers to the new quiz'
+        def tournamentDtoResult = tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+        tournamentDtoResult.topics.size() == 1
+        tournamentDtoResult.topics.find{it.aggregateId == topicDto3.aggregateId} != null
+        tournamentDtoResult.quiz.aggregateId == tournamentDto.quiz.aggregateId
+        def quizDtoResult = quizFunctionalities.findQuiz(tournamentDto.quiz.aggregateId)
+        and: 'quiz is ok as well'
+        quizDtoResult.questionDtos.size() == 1
+        quizDtoResult.questionDtos.get(0).aggregateId == questionDto3.aggregateId
+
+        when: 'the second execution is retried'
+        tournamentFunctionalities.updateTournament(tournamentDto2, topicsAggregateIds)
+        then: 'there are no errors'
+        def tournamentDtoResult2 = tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+        tournamentDtoResult2.startTime == DateHandler.toISOString(TIME_2)
+        tournamentDtoResult2.endTime == DateHandler.toISOString(TIME_4)
+    }
+
+    def 'cannot update tournament after it has started - FINAL_AFTER_START invariant'() {
+        given: 'a tournament whose start time is in the past'
+        def startedTournamentDto = createTournament(
+                DateHandler.now().minusHours(1), TIME_4, 2,
+                userCreatorDto.getAggregateId(), courseExecutionDto.getAggregateId(),
+                [topicDto1.getAggregateId(), topicDto2.getAggregateId()])
+
+        when: 'an update is attempted after the tournament has started'
+        startedTournamentDto.setNumberOfQuestions(3)
+        tournamentFunctionalities.updateTournament(startedTournamentDto, [topicDto1.getAggregateId(), topicDto2.getAggregateId()].toSet())
+
+        then: 'FINAL_AFTER_START invariant is caught by verifyInvariants()'
+        def error = thrown(SimulatorException)
+        error.errorMessage == SimulatorErrorMessage.INVARIANT_BREAK
+    }
+
+    def 'TOURNAMENT_MUST_HAVE_ONE_TOPIC invariant fires when topics are cleared directly'() {
+        given: 'a tournament aggregate loaded with its topics cleared'
+        def unitOfWork = unitOfWorkService.createUnitOfWork("invariantTest")
+        def execution = (SagaExecution) unitOfWorkService.aggregateLoadAndRegisterRead(courseExecutionDto.aggregateId, unitOfWork)
+        def tournament = execution.getTournamentByTournamentId(tournamentDto.aggregateId)
+        tournament.setTournamentTopics(new HashSet<>())
+
+        when: 'verifyInvariants is called on the owning root'
+        execution.verifyInvariants()
+
+        then: 'INVARIANT_BREAK is thrown'
+        thrown(QuizzesException)
+    }
+
+    def 'update tournament with zero numberOfQuestions violates TOURNAMENT_NUMBER_OF_QUESTIONS_POSITIVE'() {
+        given:
+        def updateDto = new TournamentDto()
+        updateDto.setAggregateId(tournamentDto.aggregateId)
+        updateDto.setNumberOfQuestions(0)
+        def topicsAggregateIds = [topicDto1.getAggregateId(), topicDto2.getAggregateId()].toSet()
+
+        when:
+        tournamentFunctionalities.updateTournament(updateDto, topicsAggregateIds)
+
+        then:
+        def error = thrown(SimulatorException)
+        error.errorMessage == SimulatorErrorMessage.INVARIANT_BREAK
+        and: 'tournament is not changed'
+        def unchanged = tournamentFunctionalities.findTournament(tournamentDto.aggregateId)
+        unchanged.numberOfQuestions == 2
+    }
+
+    def 'update tournament with negative numberOfQuestions violates TOURNAMENT_NUMBER_OF_QUESTIONS_POSITIVE'() {
+        given:
+        def updateDto = new TournamentDto()
+        updateDto.setAggregateId(tournamentDto.aggregateId)
+        updateDto.setNumberOfQuestions(-1)
+        def topicsAggregateIds = [topicDto1.getAggregateId(), topicDto2.getAggregateId()].toSet()
+
+        when:
+        tournamentFunctionalities.updateTournament(updateDto, topicsAggregateIds)
+
+        then:
+        def error = thrown(SimulatorException)
+        error.errorMessage == SimulatorErrorMessage.INVARIANT_BREAK
+        and: 'tournament is not changed'
+        def unchanged = tournamentFunctionalities.findTournament(tournamentDto.aggregateId)
+        unchanged.numberOfQuestions == 2
+    }
+
+    def 'TOURNAMENT_NUMBER_OF_QUESTIONS_POSITIVE invariant fires when numberOfQuestions is set to zero directly'() {
+        given: 'a tournament aggregate loaded with numberOfQuestions set to zero'
+        def unitOfWork = unitOfWorkService.createUnitOfWork("invariantTest")
+        def execution = (SagaExecution) unitOfWorkService.aggregateLoadAndRegisterRead(courseExecutionDto.aggregateId, unitOfWork)
+        def tournament = execution.getTournamentByTournamentId(tournamentDto.aggregateId)
+        tournament.setNumberOfQuestions(0)
+
+        when: 'verifyInvariants is called on the owning root'
+        execution.verifyInvariants()
+
+        then: 'INVARIANT_BREAK is thrown'
+        thrown(QuizzesException)
+    }
+
+    def 'update tournament with 31 numberOfQuestions violates TOURNAMENT_MAX_QUESTIONS'() {
+        given:
+        def updateDto = new TournamentDto()
+        updateDto.setAggregateId(tournamentDto.aggregateId)
+        updateDto.setNumberOfQuestions(31)
+        def topicsAggregateIds = [topicDto1.getAggregateId(), topicDto2.getAggregateId()].toSet()
+
+        when:
+        tournamentFunctionalities.updateTournament(updateDto, topicsAggregateIds)
+
+        then:
+        def error = thrown(SimulatorException)
+        error.errorMessage == SimulatorErrorMessage.INVARIANT_BREAK
+        and: 'tournament is not changed'
+        def unchanged = tournamentFunctionalities.findTournament(tournamentDto.aggregateId)
+        unchanged.numberOfQuestions == 2
+    }
+
+    def 'TOURNAMENT_MAX_QUESTIONS invariant fires when numberOfQuestions is set to 31 directly'() {
+        given: 'a tournament aggregate loaded with numberOfQuestions set to 31'
+        def unitOfWork = unitOfWorkService.createUnitOfWork("invariantTest")
+        def execution = (SagaExecution) unitOfWorkService.aggregateLoadAndRegisterRead(courseExecutionDto.aggregateId, unitOfWork)
+        def tournament = execution.getTournamentByTournamentId(tournamentDto.aggregateId)
+        tournament.setNumberOfQuestions(31)
+
+        when: 'verifyInvariants is called on the owning root'
+        execution.verifyInvariants()
+
+        then: 'INVARIANT_BREAK is thrown'
+        thrown(QuizzesException)
+    }
+
+    @TestConfiguration
+    static class LocalBeanConfiguration extends BeanConfigurationSagas {}
+}

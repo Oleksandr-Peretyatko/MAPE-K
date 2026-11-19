@@ -1,0 +1,10 @@
+run
+getTopicsStep,0,0,0
+findQuestionsByTopicIdsStep,0,0,0
+generateQuizStep,0,0,0
+createTournamentStep,0,0,0
+run
+getTopicsStep,0,0,0
+findQuestionsByTopicIdsStep,0,0,0
+generateQuizStep,0,0,0
+createTournamentStep,1,0,0

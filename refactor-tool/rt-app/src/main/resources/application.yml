@@ -1,0 +1,124 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: refactor-tool
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/refactordb}
+    username: ${SPRING_DATASOURCE_USERNAME:rt}
+    password: ${SPRING_DATASOURCE_PASSWORD:rt}
+  jpa:
+    hibernate:
+      # Never drops: columns of removed fields stay until data/drop-removed-columns.sql is run.
+      ddl-auto: update
+  # No spring.jackson.* here: AppConfig defines the ObjectMapper bean, which makes Boot's
+  # auto-configured mapper (and these keys) back off. Configure the bean instead.
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # /actuator/health is the compose healthcheck; nothing reads info or metrics.
+        include: health
+
+# ─── Refactor Tool Configuration ────────────────────────────────────────────
+#
+# Defaults for `rt.claude`, `rt.analyze` and `rt.app-target` are NOT declared here — they live in
+# org.anonymous.msrefactor.rt.constants (ClaudeConstants, AnalysisConstants,
+# AppTargetConstants, TimingConstants) so each value exists exactly once in the repo. Spring Boot
+# relaxed binding still accepts an environment override without a yaml entry, e.g.
+# RT_CLAUDE_MUTATOR_MAX_TURNS=300 or RT_ANALYZE_CANDIDATE_LIMIT=20.
+rt:
+  monitor:
+    jaeger:
+      # Base URL of the Jaeger Query HTTP API.
+      # Override with RT_MONITOR_JAEGER_BASE_URL env var when running in Docker.
+      base-url: ${RT_MONITOR_JAEGER_BASE_URL:http://localhost:16686}
+      # How many minutes of trace history to pull on each collection cycle.
+      collection-window-minutes: ${RT_MONITOR_COLLECTION_WINDOW:2}
+      # Fallback seed, used ONLY when compose topology resolution yields nothing.
+      # Normally the seed comes from rt.topology discovery, so a refactoring that renames or
+      # removes a microservice stops querying the old name automatically.
+      # These are OTel service.name values (= spring.application.name), NOT compose service
+      # names: Jaeger knows "tournament", never "tournament-service".
+      # Comma-separated on purpose: these keys are read with @Value, which cannot bind a YAML
+      # list (it is stored as known-services[0], [1], ... and the plain key falls back to the
+      # annotation default). "quizzes" is the monolith service name used by quizzes-local.
+      known-services: tournament,quiz,execution,question,topic,course,user,answer,quizzes
+      # Services to exclude from collection (Jaeger's own spans, infra noise).
+      excluded-services: jaeger-all-in-one,jaeger
+      # Operation name suffixes that identify a SAGA workflow root span.
+      saga-root-suffixes: FunctionalitySagas,Functionality
+    locust:
+      # Base URL of the standalone locust-service container.
+      # Override with LOCUST_SERVICE_URL=http://locust-service:8100 when running in Docker.
+      service-url: ${LOCUST_SERVICE_URL:http://localhost:8100}
+      # Default target host forwarded to locust-service when the caller omits it.
+      # Override with LOCUST_TARGET_HOST=http://quizzes-local:8080 in Docker.
+      default-host: ${LOCUST_TARGET_HOST:http://localhost:8080}
+      # Path (relative to git-repo-path) containing Locust *.py scenario files.
+      # Pass 5B scans these to map Locust task names to Functionality classes.
+      scripts-path: ${RT_LOCUST_SCRIPTS_PATH:refactor-tool/utils/locust}
+
+    static-analysis:
+      # Path to the git repository root (must contain .git/).
+      # Versions are discovered from git tags matching v<number> (e.g., v1, v2).
+      # Override with STATIC_ANALYSIS_GIT_REPO_PATH env var when running in Docker.
+      git-repo-path: ${STATIC_ANALYSIS_GIT_REPO_PATH:../..}
+  app:
+    # Public base URL of this rt-app instance — used to build the locust callback URL.
+    # Override with RT_APP_BASE_URL=http://rt-app:8090 when running in Docker.
+    base-url: ${RT_APP_BASE_URL:http://localhost:8090}
+  cors:
+    # Comma-separated list of allowed origins for browser CORS requests.
+    # Override with RT_CORS_ALLOWED_ORIGINS env var in Docker / production.
+    allowed-origins: ${RT_CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  execute:
+    # Absolute path to the repository root inside the container.
+    # Set RT_EXECUTE_PROJECT_ROOT=/app/project when running in Docker.
+    project-root: ${RT_EXECUTE_PROJECT_ROOT:../}
+    # Absolute path to the target application's docker-compose.yml inside the container.
+    # Default derived from AppTargetConstants; only the env override lives here.
+    compose-file: ${RT_EXECUTE_COMPOSE_FILE:../applications/quizzes/docker-compose.yml}
+    # Maven profiles forwarded to the Docker build.
+    build-profiles: ${RT_EXECUTE_BUILD_PROFILES:sagas}
+    git-user-name: ${RT_EXECUTE_GIT_USER_NAME:refactor-tool}
+    git-user-email: ${RT_EXECUTE_GIT_USER_EMAIL:refactor@simulator}
+    base-branch: ${RT_EXECUTE_BASE_BRANCH:tool/self-refactor}
+    # The mutator's turn budget is rt.claude.mutator-max-turns (RT_CLAUDE_MUTATOR_MAX_TURNS),
+    # defaulting to ClaudeConstants.MUTATOR_MAX_TURNS.
+    # When true, the Sagas test gate is skipped entirely.
+    skip-tests: ${RT_EXECUTE_SKIP_TESTS:false}
+    # Kill the test gate / image builds / compose down-up after this many seconds and FAIL the run.
+    test-timeout-seconds: ${RT_EXECUTE_TEST_TIMEOUT_SECONDS:1800}
+    build-timeout-seconds: ${RT_EXECUTE_BUILD_TIMEOUT_SECONDS:1800}
+    # Ghost mode: create the branch, park for an operator verdict, write and commit the CLAUDE.md
+    # refactor-log entry the verdict decides — and nothing else. No mutation, tests, image or
+    # deploy. For frontend work where a real iteration is too slow. Set via ./deploy.sh --ghost.
+    ghost-mode: ${RT_EXECUTE_GHOST_MODE:false}
+    # "auto" derives the service list from the compose file (see rt.topology below), so a
+    # refactoring that renames/removes/adds a microservice needs no config change. Any other
+    # value is a literal comma-separated list, e.g. "quizzes-local" for the monolith.
+    deploy-target: ${RT_EXECUTE_DEPLOY_TARGET:auto}
+    # Cold-start budget for the deploy health gate. Default in TimingConstants; override with
+    # RT_EXECUTE_DEPLOY_HEALTH_TIMEOUT_SECONDS.
+
+  # ─── Deployment topology discovery ─────────────────────────────────────────
+  # The application's docker-compose.yml is the single source of truth for which microservices
+  # exist. A service is deployable when it carries the rebuilt runtime image AND declares a
+  # START_CLASS — the image alone also matches the quizzes-local/quizzes-remote monoliths.
+  topology:
+    compose-file: ${RT_EXECUTE_COMPOSE_FILE:../applications/quizzes/docker-compose.yml}
+    project-root: ${RT_EXECUTE_PROJECT_ROOT:../}
+    runtime-image: ${RT_TOPOLOGY_RUNTIME_IMAGE:quizzes:latest}
+    # Prepended to every deploy. The gateway runs the simulator image so it is never discovered,
+    # but the stack is unusable without it. Add version-service here for distributed-version runs.
+    always-up: ${RT_TOPOLOGY_ALWAYS_UP:gateway}
+    # Escape hatch: discovered services to drop from the deploy set. Normally empty.
+    exclude: ${RT_TOPOLOGY_EXCLUDE:}
+    # Where application-<profile>.yaml files live, used to map a compose service to the
+    # spring.application.name it reports to Jaeger (tournament-service -> tournament).
+    app-resources-path: applications/quizzes/src/main/resources
+    # Used only when discovery fails and no topology was ever resolved or deployed.
+    fallback-services: answer-service,course-service,execution-service,question-service,quiz-service,topic-service,tournament-service,user-service

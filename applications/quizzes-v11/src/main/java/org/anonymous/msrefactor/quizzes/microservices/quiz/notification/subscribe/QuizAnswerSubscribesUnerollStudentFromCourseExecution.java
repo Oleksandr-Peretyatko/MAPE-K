@@ -1,0 +1,30 @@
+package org.anonymous.msrefactor.quizzes.microservices.quiz.notification.subscribe;
+
+import org.anonymous.msrefactor.ms.aggregate.Event;
+import org.anonymous.msrefactor.ms.aggregate.EventSubscription;
+import org.anonymous.msrefactor.quizzes.events.DisenrollStudentFromCourseExecutionEvent;
+import org.anonymous.msrefactor.quizzes.microservices.quiz.aggregate.QuizAnswer;
+
+public class QuizAnswerSubscribesUnerollStudentFromCourseExecution extends EventSubscription {
+    private Integer studentAggregateId;
+
+    public QuizAnswerSubscribesUnerollStudentFromCourseExecution(QuizAnswer quizAnswer) {
+        super(quizAnswer.getAnswerCourseExecution().getCourseExecutionAggregateId(),
+                quizAnswer.getAnswerCourseExecution().getCourseExecutionVersion(),
+                DisenrollStudentFromCourseExecutionEvent.class.getSimpleName());
+
+        this.studentAggregateId = quizAnswer.getStudent().getStudentAggregateId();
+    }
+
+    public QuizAnswerSubscribesUnerollStudentFromCourseExecution() {}
+
+    public boolean subscribesEvent(Event event) {
+        return super.subscribesEvent(event) && checkAnswerInfo((DisenrollStudentFromCourseExecutionEvent)event);
+    }
+
+    private boolean checkAnswerInfo(DisenrollStudentFromCourseExecutionEvent disenrollStudentFromCourseExecutionEvent) {
+        return this.studentAggregateId.equals(disenrollStudentFromCourseExecutionEvent.getStudentAggregateId());
+    }
+
+
+}

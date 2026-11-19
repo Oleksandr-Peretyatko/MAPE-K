@@ -1,0 +1,81 @@
+package org.anonymous.msrefactor.quizzes.microservices.quiz.coordination.sagas;
+
+import org.anonymous.msrefactor.ms.coordination.WorkflowFunctionality;
+import org.anonymous.msrefactor.ms.messaging.Command;
+import org.anonymous.msrefactor.ms.messaging.CommandGateway;
+import org.anonymous.msrefactor.ms.transaction.sagas.aggregate.GenericSagaState;
+import org.anonymous.msrefactor.ms.transaction.sagas.messaging.SagaCommand;
+import org.anonymous.msrefactor.ms.transaction.sagas.unitOfWork.SagaUnitOfWork;
+import org.anonymous.msrefactor.ms.transaction.sagas.unitOfWork.SagaUnitOfWorkService;
+import org.anonymous.msrefactor.ms.transaction.sagas.workflow.SagaStep;
+import org.anonymous.msrefactor.ms.transaction.sagas.workflow.SagaWorkflow;
+import org.anonymous.msrefactor.quizzes.ServiceMapping;
+import org.anonymous.msrefactor.quizzes.commands.quiz.GetQuizByIdCommand;
+import org.anonymous.msrefactor.quizzes.commands.quiz.UpdateQuizCommand;
+import org.anonymous.msrefactor.quizzes.microservices.quiz.aggregate.QuizDto;
+import org.anonymous.msrefactor.quizzes.microservices.quiz.aggregate.QuizQuestion;
+import org.anonymous.msrefactor.quizzes.microservices.quiz.aggregate.sagas.states.QuizSagaState;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public class UpdateQuizFunctionalitySagas extends WorkflowFunctionality {
+    private QuizDto quiz;
+    private QuizDto updatedQuizDto;
+    private final SagaUnitOfWorkService unitOfWorkService;
+    private final CommandGateway commandGateway;
+
+    public UpdateQuizFunctionalitySagas(SagaUnitOfWorkService unitOfWorkService,
+                                        QuizDto quizDto, SagaUnitOfWork unitOfWork, CommandGateway commandGateway) {
+        this.unitOfWorkService = unitOfWorkService;
+        this.commandGateway = commandGateway;
+        this.buildWorkflow(quizDto, unitOfWork);
+    }
+
+    public void buildWorkflow(QuizDto quizDto, SagaUnitOfWork unitOfWork) {
+        this.workflow = new SagaWorkflow(this, unitOfWorkService, unitOfWork);
+
+        SagaStep getQuizStep = new SagaStep("getQuizStep", () -> {
+            GetQuizByIdCommand getQuizByIdCommand = new GetQuizByIdCommand(unitOfWork, ServiceMapping.QUIZ.getServiceName(), quizDto.getAggregateId());
+            SagaCommand sagaCommand = new SagaCommand(getQuizByIdCommand);
+            sagaCommand.setSemanticLock(QuizSagaState.READ_QUIZ);
+            QuizDto quiz = (QuizDto) commandGateway.send(sagaCommand);
+            this.setQuiz(quiz);
+        });
+
+        getQuizStep.registerCompensation(() -> {
+            Command command = new Command(unitOfWork, ServiceMapping.QUIZ.getServiceName(), quiz.getAggregateId());
+            SagaCommand sagaCommand = new SagaCommand(command);
+            sagaCommand.setSemanticLock(GenericSagaState.NOT_IN_SAGA);
+            commandGateway.send(sagaCommand);
+        }, unitOfWork);
+
+        SagaStep updateQuizStep = new SagaStep("updateQuizStep", () -> {
+            Set<QuizQuestion> quizQuestions = quizDto.getQuestionDtos().stream().map(QuizQuestion::new).collect(Collectors.toSet());
+            UpdateQuizCommand updateQuizCommand = new UpdateQuizCommand(unitOfWork, ServiceMapping.QUIZ.getServiceName(), quizDto, quizQuestions);
+            updatedQuizDto = (QuizDto) commandGateway.send(updateQuizCommand);
+            this.setUpdatedQuizDto(updatedQuizDto);
+        }, new ArrayList<>(Arrays.asList(getQuizStep)));
+
+        workflow.addStep(getQuizStep);
+        workflow.addStep(updateQuizStep);
+    }
+
+    public QuizDto getQuiz() {
+        return quiz;
+    }
+
+    public void setQuiz(QuizDto quiz) {
+        this.quiz = quiz;
+    }
+
+    public QuizDto getUpdatedQuizDto() {
+        return updatedQuizDto;
+    }
+
+    public void setUpdatedQuizDto(QuizDto updatedQuizDto) {
+        this.updatedQuizDto = updatedQuizDto;
+    }
+}

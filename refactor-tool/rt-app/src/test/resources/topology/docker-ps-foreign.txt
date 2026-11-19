@@ -1,0 +1,7 @@
+rt-app	refactor-tool	0.0.0.0:8090->8090/tcp, [::]:8090->8090/tcp
+locust-service	refactor-tool	0.0.0.0:8100->8100/tcp, [::]:8100->8100/tcp
+rt-db	refactor-tool	0.0.0.0:5433->5432/tcp
+tournament-service	microservices-simulator	0.0.0.0:8087->8087/tcp, [::]:8087->8087/tcp
+jaeger	microservices-simulator	0.0.0.0:4317-4318->4317-4318/tcp, 5775/udp, 6831-6832/udp
+stray		127.0.0.1:9000-9001->9000-9001/tcp, :::9000-9001->9000-9001/tcp
+buildx_buildkit_rt-test-gate0

@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: tournamentSatellite
+  datasource:
+    # not ${spring.application.name}db — the camel-case service name is not a legal
+    # postgres database name; the compose env var points here too
+    url: jdbc:postgresql://localhost:5432/tournamentsatellitedb
+
+  cloud:
+    function:
+      definition: commandResponseChannel;tournamentSatelliteServiceCommandChannel;tournamentSatelliteEventSubscriber;
+    stream:
+      bindings:
+        tournamentSatellite-command-channel:
+          destination: ${spring.application.name}-command-channel
+        tournamentSatelliteServiceCommandChannel-in-0:
+          destination: ${spring.application.name}-command-channel
+          group: ${spring.application.name}-service-group
+        commandResponseChannel-in-0:
+          destination: ${spring.application.name}-command-responses
+          group: ${spring.application.name}-response-group
+        tournamentSatelliteEventSubscriber-in-0:
+          destination: event-channel
+          group: ${spring.application.name}-service-group
+
+server:
+  port: 8091
+grpc:
+  server:
+    port: 9101
+
+# the participant-facing paths moved again to tournament-satellite-satellite with
+# the roster split; what remains here are the creator-branch event triggers
+routes:
+  - id: ${spring.application.name}-service
+    uri: lb://${spring.application.name}${gateway.service-suffix}
+    predicates:
+      - Path=/tournament/process/anonymize, /tournament/process/updateExecutionStudentName
+    order: -4

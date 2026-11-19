@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: course
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${spring.application.name}db
+
+  cloud:
+    function:
+      # questionServiceCommandChannel adopted from the dissolved question-service (merge course <-
+      # question, layer 4.5 safety net): any stray question command still routes to a live handler.
+      definition: commandResponseChannel;courseServiceCommandChannel;questionServiceCommandChannel;courseEventSubscriber;
+    stream:
+      bindings:
+        course-command-channel:
+          destination: ${spring.application.name}-command-channel
+        courseServiceCommandChannel-in-0:
+          destination: ${spring.application.name}-command-channel
+          group: ${spring.application.name}-service-group
+        commandResponseChannel-in-0:
+          destination: ${spring.application.name}-command-responses
+          group: ${spring.application.name}-response-group
+        courseEventSubscriber-in-0:
+          destination: event-channel
+          group: ${spring.application.name}-service-group
+
+server:
+  port: 8089
+grpc:
+  server:
+    port: 9099
+
+# Routes adopted from the dissolved question-service (merge course <- question, layer 4.5). Distinct
+# id so it does not collide with other services' ${spring.application.name}-service route ids.
+routes:
+  - id: ${spring.application.name}-service-question
+    uri: lb://${spring.application.name}${gateway.service-suffix}
+    predicates:
+      - Path=/questions/**, /courses/*/questions/**
+    order: 4

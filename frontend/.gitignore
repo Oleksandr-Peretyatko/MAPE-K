@@ -1,0 +1,9 @@
+node_modules/
+.next*
+.yarn/
+.pnp.cjs
+.pnp.loader.mjs
+tsconfig.tsbuildinfo
+next-env.d.ts
+*.local
+*.bak
