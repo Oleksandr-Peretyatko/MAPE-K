@@ -1,0 +1,204 @@
+name: refactor-tool
+
+# ─── Shared config ─────────────────────────────────────────────────────────
+x-rt-healthcheck: &rt-healthcheck
+  test: ["CMD-SHELL", "wget -q --spider http://localhost:8090/actuator/health || exit 1"]
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 60s
+
+services:
+
+  # ─── Database ──────────────────────────────────────────────────────────────
+  rt-db:
+    image: postgres:14-alpine
+    container_name: rt-db
+    environment:
+      POSTGRES_USER: rt
+      POSTGRES_PASSWORD: rt
+      POSTGRES_DB: refactordb
+    ports:
+      - "5433:5432"   # offset to avoid clash with quizzes DBs on 5432
+    volumes:
+      - rt-db-data:/var/lib/postgresql/data
+      # No seed: the schema comes from Hibernate (ddl-auto: update) and the BASELINE version is
+      # created at boot by CodeVersionService.initBaseline, so an empty DB is a valid start.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rt -d refactordb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rt-network
+
+  # ─── Locust database ───────────────────────────────────────────────────────
+  locust-db:
+    image: postgres:16-alpine
+    container_name: locust-db
+    environment:
+      POSTGRES_USER: locust
+      POSTGRES_PASSWORD: locust
+      POSTGRES_DB: locustdb
+    volumes:
+      - locust-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U locust -d locustdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rt-network
+
+  # ─── Locust service ─────────────────────────────────────────────────────────
+  locust-service:
+    build:
+      context: ./utils/locust
+      dockerfile: Dockerfile
+    container_name: locust-service
+    ports:
+      - "8100:8100"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://locust:locust@locust-db:5432/locustdb
+    depends_on:
+      locust-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8100/health')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - rt-network          # communicate with rt-app and locust-db
+      - messaging-network   # reach quizzes-local as load-test target
+
+  # ─── Refactor Tool application ─────────────────────────────────────────────
+  rt-app:
+    build:
+      context: ./rt-app
+      dockerfile: Dockerfile
+    container_name: rt-app
+    ports:
+      - "8090:8090"
+    environment:
+      # Jaeger — must be on the same Docker network as the quizzes services
+      RT_MONITOR_JAEGER_BASE_URL: http://jaeger:16686
+      RT_MONITOR_COLLECTION_WINDOW: 15
+      # Database
+      SPRING_DATASOURCE_URL: jdbc:postgresql://rt-db:5432/refactordb
+      SPRING_DATASOURCE_USERNAME: rt
+      SPRING_DATASOURCE_PASSWORD: rt
+      # Locust service URL — rt-app delegates load tests to the standalone locust-service
+      LOCUST_SERVICE_URL: http://locust-service:8100
+      # Default target host passed to locust-service when none is specified in the request
+      LOCUST_TARGET_HOST: http://gateway:8080
+      # rt-app's own address — used to build the locust callback URL
+      RT_APP_BASE_URL: http://rt-app:8090
+      # Git repository root for multi-version static M1/M2 analysis (tag-based)
+      STATIC_ANALYSIS_GIT_REPO_PATH: /app/project
+      # ── Execute phase ──────────────────────────────────────────────────────
+      RT_EXECUTE_PROJECT_ROOT: /app/project
+      RT_EXECUTE_COMPOSE_FILE: /app/project/applications/quizzes/docker-compose.yml
+      # Maven profile baked into the runtime image. The application implements sagas only.
+      RT_EXECUTE_BUILD_PROFILES: sagas
+      RT_EXECUTE_GIT_USER_NAME: refactor-tool
+      RT_EXECUTE_GIT_USER_EMAIL: anonymous@example.org
+      RT_EXECUTE_BASE_BRANCH: ${RT_EXECUTE_BASE_BRANCH:-tool/self-refactor}
+      # "auto" derives the service list from applications/quizzes/docker-compose.yml on every
+      # deploy, so a refactoring that renames, removes or adds a microservice (merge, split,
+      # create, remove) needs no change here. Set a literal comma-separated list to override,
+      # e.g. "quizzes-local" for the monolith deployment.
+      RT_EXECUTE_DEPLOY_TARGET: ${RT_EXECUTE_DEPLOY_TARGET:-auto}
+      # Max seconds to wait for services to become healthy before marking the deploy FAILED.
+      # The deploy tears the project down and back up, so this must cover a cold start: each
+      # service has a 180s healthcheck start_period behind a freshly created database.
+      RT_EXECUTE_DEPLOY_HEALTH_TIMEOUT_SECONDS: ${RT_EXECUTE_DEPLOY_HEALTH_TIMEOUT_SECONDS:-600}
+      # Runtime deployment mode — MUST match how the quizzes stack was launched, because
+      # rt-app redeploys it (`docker compose down` + `up`) and these are re-interpolated from
+      # its own environment. Sourced from refactor-tool/.env. An empty VERSION_MODE silently
+      # reverts services to the default local VersionService.
+      VERSION_MODE: ${VERSION_MODE:-}
+      COMM_LAYER: ${COMM_LAYER:-stream}
+      # Set to true to skip the Sagas test gate (faster iteration, less validation).
+      RT_EXECUTE_SKIP_TESTS: ${RT_EXECUTE_SKIP_TESTS:-false}
+      # Seconds before the test gate / image builds / compose down-up are killed and the run FAILS.
+      RT_EXECUTE_TEST_TIMEOUT_SECONDS: ${RT_EXECUTE_TEST_TIMEOUT_SECONDS:-1800}
+      RT_EXECUTE_BUILD_TIMEOUT_SECONDS: ${RT_EXECUTE_BUILD_TIMEOUT_SECONDS:-1800}
+      # Bash tool timeout for the Claude mutator. Its last step runs the sagas test gate
+      # (`test-gate`, rt-app/docker/test-gate.sh), which exceeds the CLI's 10-minute default on a cold
+      # build cache. Keep in line with RT_EXECUTE_TEST_TIMEOUT_SECONDS.
+      BASH_DEFAULT_TIMEOUT_MS: ${BASH_DEFAULT_TIMEOUT_MS:-1800000}
+      BASH_MAX_TIMEOUT_MS: ${BASH_MAX_TIMEOUT_MS:-1800000}
+      # Ghost mode — branch + operator verdict + CLAUDE.md log entry only; no mutation, tests,
+      # image or deploy. Set by ./deploy.sh --ghost / ./deploy-rt.sh --ghost.
+      RT_EXECUTE_GHOST_MODE: ${RT_EXECUTE_GHOST_MODE:-false}
+      # Operations Analyze may propose (comma-separated OperationType names). Replicas are off for
+      # now; add CREATE_REPLICA / REMOVE_REPLICA here or in .env to re-enable them — no rebuild.
+      RT_ANALYZE_ENABLED_OPERATIONS: ${RT_ANALYZE_ENABLED_OPERATIONS:-MERGE_AGGREGATES,SPLIT_AGGREGATE}
+      # ── Overridable constants ──────────────────────────────────────────────
+      # Defaults live in rt/constants/ (ClaudeConstants, AnalysisConstants, AppTargetConstants,
+      # TimingConstants) — one place, one value. Uncomment any line here (or set it in .env) to
+      # override at runtime without recompiling. Leaving them commented keeps the constant.
+      # Turn budget for the Execute-phase mutator run. A skill that inventories the source tree
+      # before mutating (merge-aggregate) needs well over a hundred; running out fails the
+      # iteration and discards every edit made so far.
+      RT_CLAUDE_MUTATOR_MAX_TURNS: ${RT_CLAUDE_MUTATOR_MAX_TURNS:-200}
+      #RT_CLAUDE_ENRICHER_MAX_TURNS: ${RT_CLAUDE_ENRICHER_MAX_TURNS:-30}
+      #RT_CLAUDE_CLI_MODEL: ${RT_CLAUDE_CLI_MODEL:-claude-opus-4-8}
+      #RT_APP_TARGET_NAME: ${RT_APP_TARGET_NAME:-quizzes}
+      #RT_APP_TARGET_PATH: ${RT_APP_TARGET_PATH:-applications/quizzes}
+      #RT_APP_TARGET_IMAGE_REPO: ${RT_APP_TARGET_IMAGE_REPO:-quizzes}
+      # GitHub PAT for non-interactive git fetch/push inside the container.
+      # Create a classic token at https://github.com/settings/tokens (repo scope).
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      # ── Execute phase ──────────────────────────────────────────────────────
+      # Full repository root mounted read-write so the Execute phase can run
+      # git operations and mutate source files in applications/quizzes/.
+      - ../:/app/project
+      # Docker daemon socket (Docker-outside-of-Docker) so the Execute phase
+      # can run docker build and docker compose from inside the container.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount host Claude Code credentials so the claude CLI can authenticate
+      # via the Pro Max OAuth session (run `claude login` on the host once).
+      # Claude Code uses BOTH ~/.claude.json (main config) AND ~/.claude/ (tokens/backups).
+      # On Windows the host path resolves via USERPROFILE; on Linux/macOS via ~.
+      - ${USERPROFILE:-~}/.claude:/root/.claude:ro
+      - ${USERPROFILE:-~}/.claude.json:/root/.claude.json:ro
+      # The claude CLI writes per-session state to ~/.claude/session-env/ at runtime.
+      # This named volume overlays the read-only parent mount with a writable layer
+      # for just that subdirectory, so credentials stay protected.
+      - claude-session-env:/root/.claude/session-env
+    depends_on:
+      rt-db:
+        condition: service_healthy
+      locust-service:
+        condition: service_healthy
+    healthcheck:
+      <<: *rt-healthcheck
+    networks:
+      - rt-network
+      - messaging-network   # must join the same network as Jaeger
+
+# ─── Volumes ───────────────────────────────────────────────────────────────
+volumes:
+  # Writable scratch space for claude CLI session state inside the container.
+  # Overlays the read-only ~/.claude host mount for the session-env subdirectory only.
+  claude-session-env:
+  # Persistent storage for the refactor-tool database.
+  rt-db-data:
+  # Persistent storage for the locust service database.
+  locust-db-data:
+
+# ─── Networks ──────────────────────────────────────────────────────────────
+networks:
+  rt-network:
+    driver: bridge
+
+  # Attach to the existing quizzes infrastructure network so rt-app can
+  # reach Jaeger. The network is created by the parent docker-compose.yml in
+  # the repo root (name: microservices-simulator).
+  messaging-network:
+    external: true
+    name: microservices-simulator_messaging-network

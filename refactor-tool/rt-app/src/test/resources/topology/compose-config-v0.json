@@ -1,0 +1,870 @@
+{
+ "name": "microservices-simulator",
+ "services": {
+  "answer-db": {
+   "container_name": "answer-db",
+   "environment": {
+    "POSTGRES_DB": "answerdb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "answer-service": {
+   "container_name": "answer-service",
+   "depends_on": {
+    "answer-db": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://answer-db:5432/answerdb",
+    "SPRING_PROFILES_ACTIVE": "answer-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.answer.AnswerServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8082/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8082",
+     "target": 8082
+    }
+   ]
+  },
+  "course-db": {
+   "container_name": "course-db",
+   "environment": {
+    "POSTGRES_DB": "coursedb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "course-service": {
+   "container_name": "course-service",
+   "depends_on": {
+    "course-db": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://course-db:5432/coursedb",
+    "SPRING_PROFILES_ACTIVE": "course-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.course.CourseServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8089/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8089",
+     "target": 8089
+    }
+   ]
+  },
+  "eureka-server": {
+   "container_name": "eureka-server",
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 10,
+    "start_period": "30s",
+    "test": [
+     "CMD",
+     "wget",
+     "-q",
+     "--spider",
+     "http://localhost:8761/actuator/health"
+    ],
+    "timeout": "5s"
+   },
+   "image": "steeltoeoss/eureka-server:4.1.1",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8761",
+     "target": 8761
+    }
+   ]
+  },
+  "execution-db": {
+   "container_name": "execution-db",
+   "environment": {
+    "POSTGRES_DB": "executiondb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "execution-service": {
+   "container_name": "execution-service",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "execution-db": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://execution-db:5432/executiondb",
+    "SPRING_PROFILES_ACTIVE": "execution-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.execution.ExecutionServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8083/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8083",
+     "target": 8083
+    }
+   ]
+  },
+  "gateway": {
+   "container_name": "gateway",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "BUFFER_LOG_LEVEL": "INFO",
+    "EUREKA_HOST": "eureka-server",
+    "GATEWAY_LOG_LEVEL": "INFO",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "REACTIVE_LOG_LEVEL": "INFO",
+    "SPRING_PROFILES_ACTIVE": "gateway",
+    "START_CLASS": "org.anonymous.msrefactor.ms.gateway.GatewayApplication",
+    "VERSION_SERVICE_HOST": "version-service"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8080/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "simulator:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8080",
+     "target": 8080
+    }
+   ]
+  },
+  "jaeger": {
+   "container_name": "jaeger",
+   "environment": {
+    "COLLECTOR_OTLP_ENABLED": "true"
+   },
+   "image": "jaegertracing/all-in-one:1.75.0",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "16686",
+     "target": 16686
+    },
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "14250",
+     "target": 14250
+    },
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "14268",
+     "target": 14268
+    },
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "4317",
+     "target": 4317
+    },
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "4318",
+     "target": 4318
+    }
+   ]
+  },
+  "postgres": {
+   "container_name": "postgres",
+   "environment": {
+    "POSTGRES_DB": "msdb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "20s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "5432",
+     "target": 5432
+    }
+   ]
+  },
+  "question-db": {
+   "container_name": "question-db",
+   "environment": {
+    "POSTGRES_DB": "questiondb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "question-service": {
+   "container_name": "question-service",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "question-db": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://question-db:5432/questiondb",
+    "SPRING_PROFILES_ACTIVE": "question-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.question.QuestionServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8084/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8084",
+     "target": 8084
+    }
+   ]
+  },
+  "quiz-db": {
+   "container_name": "quiz-db",
+   "environment": {
+    "POSTGRES_DB": "quizdb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "quiz-service": {
+   "container_name": "quiz-service",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "quiz-db": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://quiz-db:5432/quizdb",
+    "SPRING_PROFILES_ACTIVE": "quiz-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.quiz.QuizServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8085/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8085",
+     "target": 8085
+    }
+   ]
+  },
+  "quizzes-local": {
+   "container_name": "quizzes-local",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "postgres": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://postgres:5432/msdb",
+    "SPRING_PROFILES_ACTIVE": "sagas,local",
+    "SPRING_PROFILES_INCLUDE": ""
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8080",
+     "target": 8080
+    }
+   ]
+  },
+  "quizzes-remote": {
+   "container_name": "quizzes-remote",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "postgres": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://postgres:5432/msdb",
+    "SPRING_PROFILES_ACTIVE": "sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8080",
+     "target": 8080
+    }
+   ]
+  },
+  "rabbitmq": {
+   "container_name": "rabbitmq",
+   "environment": {
+    "RABBITMQ_DEFAULT_PASS": "guest",
+    "RABBITMQ_DEFAULT_USER": "guest",
+    "RABBITMQ_DEFAULT_VHOST": "/"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD",
+     "rabbitmqctl",
+     "status"
+    ],
+    "timeout": "5s"
+   },
+   "image": "rabbitmq:4-management",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "5672",
+     "target": 5672
+    },
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "15672",
+     "target": 15672
+    }
+   ]
+  },
+  "test-quizzes-sagas": {
+   "depends_on": {
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    }
+   },
+   "environment": {
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317"
+   },
+   "image": "quizzes-tests:latest"
+  },
+  "test-simulator-sagas": {
+   "image": "simulator-tests:latest"
+  },
+  "topic-db": {
+   "container_name": "topic-db",
+   "environment": {
+    "POSTGRES_DB": "topicdb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "topic-service": {
+   "container_name": "topic-service",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "topic-db": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://topic-db:5432/topicdb",
+    "SPRING_PROFILES_ACTIVE": "topic-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.topic.TopicServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8086/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8086",
+     "target": 8086
+    }
+   ]
+  },
+  "tournament-db": {
+   "container_name": "tournament-db",
+   "environment": {
+    "POSTGRES_DB": "tournamentdb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "tournament-service": {
+   "container_name": "tournament-service",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "tournament-db": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://tournament-db:5432/tournamentdb",
+    "SPRING_PROFILES_ACTIVE": "tournament-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.tournament.TournamentServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8087/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8087",
+     "target": 8087
+    }
+   ]
+  },
+  "user-db": {
+   "container_name": "user-db",
+   "environment": {
+    "POSTGRES_DB": "userdb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "user-service": {
+   "container_name": "user-service",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "user-db": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4317",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://user-db:5432/userdb",
+    "SPRING_PROFILES_ACTIVE": "user-service,sagas,stream",
+    "SPRING_PROFILES_INCLUDE": "",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.quizzes.microservices.user.UserServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8088/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "quizzes:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8088",
+     "target": 8088
+    }
+   ]
+  },
+  "version-db": {
+   "container_name": "version-db",
+   "environment": {
+    "POSTGRES_DB": "versiondb",
+    "POSTGRES_PASSWORD": "postgres",
+    "POSTGRES_USER": "postgres"
+   },
+   "healthcheck": {
+    "interval": "10s",
+    "retries": 5,
+    "test": [
+     "CMD-SHELL",
+     "pg_isready -U postgres"
+    ],
+    "timeout": "5s"
+   },
+   "image": "postgres:14-alpine"
+  },
+  "version-service": {
+   "container_name": "version-service",
+   "depends_on": {
+    "eureka-server": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "jaeger": {
+     "condition": "service_started",
+     "required": true
+    },
+    "rabbitmq": {
+     "condition": "service_healthy",
+     "required": true
+    },
+    "version-db": {
+     "condition": "service_healthy",
+     "required": true
+    }
+   },
+   "environment": {
+    "EUREKA_HOST": "eureka-server",
+    "JAVA_TOOL_OPTIONS": "-XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0",
+    "SPRING_DATASOURCE_URL": "jdbc:postgresql://version-db:5432/versiondb",
+    "SPRING_PROFILES_ACTIVE": "version-service,stream",
+    "SPRING_RABBITMQ_HOST": "rabbitmq",
+    "START_CLASS": "org.anonymous.msrefactor.ms.versioning.VersionServiceApplication"
+   },
+   "healthcheck": {
+    "interval": "30s",
+    "retries": 5,
+    "start_period": "3m0s",
+    "test": [
+     "CMD-SHELL",
+     "wget -q --spider http://localhost:8081/actuator/health || exit 1"
+    ],
+    "timeout": "10s"
+   },
+   "image": "simulator:latest",
+   "ports": [
+    {
+     "mode": "ingress",
+     "protocol": "tcp",
+     "published": "8081",
+     "target": 8081
+    }
+   ]
+  }
+ }
+}

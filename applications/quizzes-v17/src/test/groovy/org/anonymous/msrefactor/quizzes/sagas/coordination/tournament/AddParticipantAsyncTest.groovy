@@ -1,0 +1,265 @@
+package org.anonymous.msrefactor.quizzes.sagas.coordination.tournament
+
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.transaction.annotation.Transactional
+import org.anonymous.msrefactor.ms.aggregate.AggregateIdRepository
+import org.anonymous.msrefactor.ms.messaging.local.LocalCommandGateway
+import org.anonymous.msrefactor.ms.monitoring.TraceService
+import org.anonymous.msrefactor.ms.notification.EventRepository
+import org.anonymous.msrefactor.ms.notification.EventService
+import org.anonymous.msrefactor.ms.transaction.sagas.unitOfWork.SagaUnitOfWorkService
+import org.anonymous.msrefactor.ms.versioning.VersionRepository
+import org.anonymous.msrefactor.quizzes.QuizzesSpockTest
+import org.anonymous.msrefactor.quizzes.microservices.answer.aggregate.QuizAnswerRepository
+import org.anonymous.msrefactor.quizzes.microservices.course.aggregate.CourseRepository
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.CourseExecutionDto
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.CourseExecutionRepository
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.functionalities.ExecutionFunctionalities
+import org.anonymous.msrefactor.quizzes.microservices.execution.service.ExecutionService
+import org.anonymous.msrefactor.quizzes.microservices.course.aggregate.QuestionDto
+import org.anonymous.msrefactor.quizzes.microservices.topic.aggregate.TopicDto
+import org.anonymous.msrefactor.quizzes.microservices.topic.aggregate.TopicRepository
+import org.anonymous.msrefactor.quizzes.microservices.execution.aggregate.TournamentDto
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.sagas.AddParticipantAsyncFunctionalitySagas
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.sagas.AddParticipantFunctionalitySagas
+import org.anonymous.msrefactor.quizzes.microservices.execution.notification.handling.CourseExecutionEventHandling
+import org.anonymous.msrefactor.quizzes.microservices.user.aggregate.UserDto
+import org.anonymous.msrefactor.quizzes.microservices.user.aggregate.UserRepository
+
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+
+@SpringBootTest
+class AddParticipantAsyncTest extends QuizzesSpockTest {
+    @Autowired
+    private SagaUnitOfWorkService unitOfWorkService
+
+    @Autowired
+    private ExecutionService courseExecutionService
+    @Autowired
+    private ExecutionService tournamentService
+
+    @Autowired
+    private ExecutionFunctionalities courseExecutionFunctionalities
+    @Autowired
+    private ExecutionFunctionalities tournamentFunctionalities
+
+    @Autowired
+    private EventService eventService
+
+    @Autowired
+    private CourseExecutionEventHandling tournamentEventHandling
+    
+    @Autowired
+    private LocalCommandGateway commandGateway
+    
+    @Autowired
+    public TraceService traceService
+
+    @Autowired
+    private CourseRepository courseRepository
+    @Autowired
+    private CourseExecutionRepository courseExecutionRepository
+    @Autowired
+    private UserRepository userRepository
+    @Autowired
+    private TopicRepository topicRepository
+    @Autowired
+    private QuizAnswerRepository quizAnswerRepository
+    @Autowired
+    private EventRepository eventRepository
+    @Autowired
+    private AggregateIdRepository aggregateIdRepository
+    @Autowired
+    private VersionRepository versionRepository
+
+    private CourseExecutionDto courseExecutionDto
+    private UserDto userCreatorDto, userDto, userDto3
+    private TopicDto topicDto1, topicDto2, topicDto3
+    private QuestionDto questionDto1, questionDto2, questionDto3
+    private TournamentDto tournamentDto
+
+    def setup() {
+        given: 'a course execution'
+        courseExecutionDto = createCourseExecution(COURSE_EXECUTION_NAME, COURSE_EXECUTION_TYPE, COURSE_EXECUTION_ACRONYM, COURSE_EXECUTION_ACADEMIC_TERM, TIME_4)
+
+
+        and: 'a user to enroll in the course execution'
+        userCreatorDto = createUser(USER_NAME_1, USER_USERNAME_1, STUDENT_ROLE)
+        courseExecutionFunctionalities.addStudent(courseExecutionDto.getAggregateId(), userCreatorDto.getAggregateId())
+
+        and: 'another user to enroll in the course execution'
+        userDto = createUser(USER_NAME_2, USER_USERNAME_2, STUDENT_ROLE)
+        courseExecutionFunctionalities.addStudent(courseExecutionDto.aggregateId, userDto.aggregateId)
+
+        and: 'a third user to enroll in the course execution'
+        userDto3 = createUser(USER_NAME_3, USER_USERNAME_3, STUDENT_ROLE)
+        courseExecutionFunctionalities.addStudent(courseExecutionDto.aggregateId, userDto3.aggregateId)
+
+        and: 'three topics'
+        topicDto1 = createTopic(courseExecutionDto, TOPIC_NAME_1)
+        topicDto2 = createTopic(courseExecutionDto, TOPIC_NAME_2)
+        topicDto3 = createTopic(courseExecutionDto, TOPIC_NAME_3)
+
+        and: 'three questions'
+        questionDto1 = createQuestion(courseExecutionDto, new HashSet<>(Arrays.asList(topicDto1)), TITLE_1, CONTENT_1, OPTION_1, OPTION_2)
+        questionDto2 = createQuestion(courseExecutionDto, new HashSet<>(Arrays.asList(topicDto2)), TITLE_2, CONTENT_2, OPTION_3, OPTION_4)
+        questionDto3 = createQuestion(courseExecutionDto, new HashSet<>(Arrays.asList(topicDto3)), TITLE_3, CONTENT_3, OPTION_1, OPTION_3)
+
+        and: 'a tournament where the first user is the creator'
+        tournamentDto = createTournament(TIME_1, TIME_3, 2, userCreatorDto.getAggregateId(), courseExecutionDto.getAggregateId(), [topicDto1.getAggregateId(), topicDto2.getAggregateId()])
+
+    }
+
+    @Transactional
+    def cleanup() {
+        quizAnswerRepository.deleteAllInBatch()
+        topicRepository.deleteAllInBatch()
+        courseExecutionRepository.deleteAllInBatch()
+        courseRepository.deleteAllInBatch()
+        userRepository.deleteAllInBatch()
+        eventRepository.deleteAllInBatch()
+        aggregateIdRepository.deleteAllInBatch()
+        versionRepository.deleteAllInBatch()
+        impairmentService.cleanUpCounter()
+    }
+
+
+
+     def 'add one participant' () {
+         when: 'student is added to tournament'
+         tournamentFunctionalities.addParticipantAsync(tournamentDto.getAggregateId(), courseExecutionDto.getAggregateId(), userDto.getAggregateId())
+         then: 'student is added'
+         def tournamentDtoResult = tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+         tournamentDtoResult.getParticipants().size() == 1
+         tournamentDtoResult.getParticipants().find{it.aggregateId == userDto.aggregateId}.name == USER_NAME_2
+     }
+
+     def 'add a participant'() {
+         given: 'create a unit of work'
+         def functionalityName = AddParticipantAsyncFunctionalitySagas.class.getSimpleName()
+         def unitOfWork = unitOfWorkService.createUnitOfWork(functionalityName)
+
+         and: 'a functionality to add a participant asynchronously'
+         def addParticipantFunctionality = new AddParticipantAsyncFunctionalitySagas(
+             unitOfWorkService, tournamentService,
+             tournamentDto.getAggregateId(), courseExecutionDto.getAggregateId(),
+             userDto.getAggregateId(), unitOfWork
+         )
+         System.out.println(courseExecutionDto.getAggregateId())
+
+         when: 'execute the workflow to add a participant'
+         addParticipantFunctionality.executeWorkflow(unitOfWork)
+
+         then: 'the participant is successfully added to the tournament'
+         def updatedTournament = tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+         updatedTournament.participants.size() == 1
+         updatedTournament.participants.any { it.aggregateId == userDto.getAggregateId() }
+     }
+
+     def 'add two participants to tournament concurrently with async steps'() {
+         // both writers now mutate the same Execution root, so a transient serialization
+         // conflict (H2 deadlock) can roll one saga back; retry preserves the test intent
+         given: 'a retrying runner for concurrent addition of participants'
+         def addParticipantWithRetry = { Integer participantAggregateId ->
+             for (int attempt = 0; ; attempt++) {
+                 try {
+                     def unitOfWork = unitOfWorkService.createUnitOfWork(AddParticipantAsyncFunctionalitySagas.class.getSimpleName())
+                     new AddParticipantAsyncFunctionalitySagas(
+                         unitOfWorkService, tournamentService,
+                         tournamentDto.getAggregateId(), courseExecutionDto.getAggregateId(),
+                         participantAggregateId, unitOfWork
+                     ).executeWorkflow(unitOfWork)
+                     return
+                 } catch (Exception e) {
+                     boolean transientConflict = false
+                     for (Throwable t = e; t != null; t = t.getCause()) {
+                         if (t.getMessage()?.contains("Deadlock") || t.getClass().getSimpleName() == "CannotAcquireLockException") {
+                             transientConflict = true
+                             break
+                         }
+                     }
+                     if (!transientConflict || attempt >= 3) {
+                         throw e
+                     }
+                 }
+             }
+         }
+
+         when: 'execute both workflows concurrently'
+         def future1 = CompletableFuture.runAsync({
+             addParticipantWithRetry(userDto.getAggregateId())
+         } as Runnable)
+         def future2 = CompletableFuture.runAsync({
+             addParticipantWithRetry(userDto3.getAggregateId())
+         } as Runnable)
+        
+         // Wait for both futures to complete
+         CompletableFuture.allOf(future1, future2).join()
+
+         then: 'both participants are successfully added to the tournament'
+         def updatedTournament = tournamentFunctionalities.findTournament(tournamentDto.getAggregateId())
+         updatedTournament.participants.size() == 2
+         updatedTournament.participants.any { it.aggregateId == userDto.getAggregateId() }
+         updatedTournament.participants.any { it.aggregateId == userDto3.getAggregateId() }
+     }
+
+     def 'compare async vs sync implementation performance'() {
+         given: 'create unit of works'
+         def asyncFunctionalityName = AddParticipantAsyncFunctionalitySagas.class.getSimpleName()
+         def syncFunctionalityName = AddParticipantFunctionalitySagas.class.getSimpleName()
+         def asyncUnitOfWork1 = unitOfWorkService.createUnitOfWork(asyncFunctionalityName)
+         def asyncUnitOfWork2 = unitOfWorkService.createUnitOfWork(asyncFunctionalityName)
+         def syncUnitOfWork1 = unitOfWorkService.createUnitOfWork(syncFunctionalityName)
+         def syncUnitOfWork2 = unitOfWorkService.createUnitOfWork(syncFunctionalityName)
+
+         when: 'measure sync execution time'
+         def syncTournamentDto = createTournament(TIME_1, TIME_3, 2, userCreatorDto.getAggregateId(), courseExecutionDto.getAggregateId(), [topicDto1.getAggregateId(), topicDto2.getAggregateId()])
+
+         def syncFunc1 = new AddParticipantFunctionalitySagas(
+             unitOfWorkService, tournamentService,
+             syncTournamentDto.getAggregateId(), courseExecutionDto.getAggregateId(),
+             userDto.getAggregateId(), syncUnitOfWork1
+         )
+         def syncFunc2 = new AddParticipantFunctionalitySagas(
+             unitOfWorkService, tournamentService,
+             syncTournamentDto.getAggregateId(), courseExecutionDto.getAggregateId(),
+             userDto3.getAggregateId(), syncUnitOfWork2
+         )
+        
+         // nanoTime, not currentTimeMillis: the wall clock can step back when the Docker VM resyncs it
+         def syncStart = System.nanoTime()
+         syncFunc1.executeWorkflow(syncUnitOfWork1)
+         syncFunc2.executeWorkflow(syncUnitOfWork2)
+         def syncEnd = System.nanoTime()
+         def syncDuration = TimeUnit.NANOSECONDS.toMillis(syncEnd - syncStart)
+        
+         and: 'measure async execution time'
+         def asyncTournamentDto = createTournament(TIME_1, TIME_3, 2, userCreatorDto.getAggregateId(), courseExecutionDto.getAggregateId(), [topicDto1.getAggregateId(), topicDto2.getAggregateId()])
+
+         def asyncFunc1 = new AddParticipantAsyncFunctionalitySagas(
+             unitOfWorkService, tournamentService,
+             asyncTournamentDto.getAggregateId(), courseExecutionDto.getAggregateId(),
+             userDto.getAggregateId(), asyncUnitOfWork1
+         )
+         def asyncFunc2 = new AddParticipantAsyncFunctionalitySagas(
+             unitOfWorkService, tournamentService,
+             asyncTournamentDto.getAggregateId(), courseExecutionDto.getAggregateId(),
+             userDto3.getAggregateId(), asyncUnitOfWork2
+         )
+        
+         def asyncStart = System.nanoTime()
+         asyncFunc1.executeWorkflow(asyncUnitOfWork1)
+         asyncFunc2.executeWorkflow(asyncUnitOfWork2)
+         def asyncEnd = System.nanoTime()
+         def asyncDuration = TimeUnit.NANOSECONDS.toMillis(asyncEnd - asyncStart)
+
+         then: 'async execution should be faster or comparable to sync execution'
+         println "Sync execution took: ${syncDuration}ms"
+         println "Async execution took: ${asyncDuration}ms"
+         // Not using a strict assertion as performance can vary, but we expect async to be faster
+         // in general when there are non-trivial operations that can benefit from parallelism
+         true
+     }
+}

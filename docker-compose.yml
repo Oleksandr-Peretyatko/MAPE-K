@@ -1,0 +1,200 @@
+name: microservices-simulator
+
+# ============================================
+# SHARED CONFIGURATION (YAML anchors)
+# ============================================
+
+x-postgres-env: &postgres-env
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+
+x-service-db: &service-db
+  image: postgres:14-alpine
+  healthcheck:
+    # -h forces TCP. The entrypoint's init-time server listens only on the Unix socket, so a
+    # socket check reports healthy before the database exists — and stays healthy if init hangs.
+    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 30s
+  networks:
+    - messaging-network
+
+x-service-healthcheck: &service-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 180s
+
+x-limits-small: &limits-small
+  mem_limit: ${SMALL_MEM_LIMIT:-384m}
+  mem_reservation: ${SMALL_MEM_RESERVATION:-256m}
+  cpus: ${SMALL_CPUS:-0.5}
+
+x-limits-medium: &limits-medium
+  mem_limit: ${MEDIUM_MEM_LIMIT:-768m}
+  mem_reservation: ${MEDIUM_MEM_RESERVATION:-512m}
+  cpus: ${MEDIUM_CPUS:-1.0}
+
+x-microservice-deps: &microservice-deps
+  eureka-server:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+  jaeger:
+    condition: service_started
+
+services:
+  # ============================================
+  # INFRASTRUCTURE
+  # ============================================
+  eureka-server:
+    image: steeltoeoss/eureka-server:4.1.1
+    container_name: eureka-server
+    ports:
+      - "8761:8761"
+    <<: *limits-medium
+    networks:
+      - messaging-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8761/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.75.0
+    container_name: jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "14250:14250" # Jaeger gRPC
+      - "14268:14268" # Jaeger HTTP
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+    <<: *limits-small
+    restart: unless-stopped
+    networks:
+      - messaging-network
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI port
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    <<: *limits-small
+    networks:
+      - messaging-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # SIMULATOR SERVICES
+  # ============================================
+  version-db:
+    <<: [*service-db, *limits-small]
+    container_name: version-db
+    environment:
+      <<: *postgres-env
+      POSTGRES_DB: versiondb
+
+  version-service:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+      args:
+        PROFILE: version-service,${COMM_LAYER:-stream}
+    image: simulator:latest
+    pull_policy: build
+    container_name: version-service
+    depends_on:
+      <<: *microservice-deps
+      version-db:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+    environment:
+      START_CLASS: org.anonymous.msrefactor.ms.versioning.VersionServiceApplication
+      SPRING_PROFILES_ACTIVE: version-service,${COMM_LAYER:-stream}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://version-db:5432/versiondb
+      SPRING_RABBITMQ_HOST: rabbitmq
+      EUREKA_HOST: eureka-server
+      JAVA_TOOL_OPTIONS: '${JAVA_TOOL_OPTIONS:--XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0}'
+    <<: *limits-medium
+    networks:
+      - messaging-network
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/actuator/health || exit 1"]
+
+  gateway:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+      args:
+        PROFILE: gateway
+    image: simulator:latest
+    pull_policy: build
+    container_name: gateway
+    depends_on:
+      <<: *microservice-deps
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    environment:
+      START_CLASS: org.anonymous.msrefactor.ms.gateway.GatewayApplication
+      SPRING_PROFILES_ACTIVE: gateway
+      VERSION_SERVICE_HOST: version-service
+      EUREKA_HOST: eureka-server
+      GATEWAY_LOG_LEVEL: INFO
+      REACTIVE_LOG_LEVEL: INFO
+      BUFFER_LOG_LEVEL: INFO
+      JAVA_TOOL_OPTIONS: '${JAVA_TOOL_OPTIONS:--XX:InitialRAMPercentage=50.0 -XX:MaxRAMPercentage=75.0}'
+    <<: *limits-medium
+    networks:
+      - messaging-network
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+
+  # ============================================
+  # TEST CONTAINER (SIMULATOR)
+  # ============================================
+  test-simulator-sagas:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile.test
+    image: simulator-tests:latest
+    pull_policy: build
+    stop_signal: SIGKILL
+    stdin_open: true
+    tty: true
+    working_dir: /simulator
+    command: mvn -Ptest-sagas test
+    volumes:
+      - m2_cache:/root/.m2
+
+volumes:
+  rabbitmq_data:
+  m2_cache:
+
+networks:
+  messaging-network:
+    driver: bridge

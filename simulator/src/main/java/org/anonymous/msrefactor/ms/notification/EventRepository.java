@@ -1,0 +1,21 @@
+package org.anonymous.msrefactor.ms.notification;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+import org.anonymous.msrefactor.ms.aggregate.Event;
+
+import java.util.List;
+
+@Repository
+public interface EventRepository extends JpaRepository<Event, Integer> {
+    @Query("SELECT e FROM Event e WHERE TYPE(e) = :eventType AND e.published = true " +
+            "AND e.publisherAggregateId = :pubAggId AND e.publisherAggregateVersion > :subVersion " +
+            "ORDER BY e.timestamp DESC")
+    List<Event> findUnprocessedEvents(
+            @Param("eventType") Class<? extends Event> eventType,
+            @Param("pubAggId") Integer publisherAggregateId,
+            @Param("subVersion") Long subscribedVersion
+    );
+}

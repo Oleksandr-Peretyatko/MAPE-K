@@ -1,0 +1,46 @@
+package org.anonymous.msrefactor.quizzes.microservices.execution.coordination.eventProcessing;
+
+import org.slf4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.anonymous.msrefactor.quizzes.events.DeleteQuestionEvent;
+import org.anonymous.msrefactor.quizzes.events.DeleteTopicEvent;
+import org.anonymous.msrefactor.quizzes.events.DeleteUserEvent;
+import org.anonymous.msrefactor.quizzes.events.UpdateQuestionEvent;
+import org.anonymous.msrefactor.quizzes.events.UpdateTopicEvent;
+import org.anonymous.msrefactor.quizzes.microservices.execution.coordination.functionalities.ExecutionFunctionalities;
+
+@Service
+public class ExecutionEventProcessing {
+    private static final Logger logger = org.slf4j.LoggerFactory.getLogger(ExecutionEventProcessing.class);
+
+    @Autowired
+    private ExecutionFunctionalities executionFunctionalities;
+
+    public void processDeleteUserEvent(Integer aggregateId, DeleteUserEvent deleteUserEvent) {
+        logger.info("Processing DeleteUserEvent: aggregateId={}, event={}", aggregateId, deleteUserEvent);
+        executionFunctionalities.removeUserFromCourseExecution(aggregateId, deleteUserEvent.getPublisherAggregateId());
+    }
+
+    public void processUpdateQuestionEvent(Integer aggregateId, UpdateQuestionEvent updateQuestionEvent) {
+        logger.info("Processing UpdateQuestionEvent: aggregateId={}, event={}", aggregateId, updateQuestionEvent);
+        executionFunctionalities.updateQuestionInQuiz(aggregateId, updateQuestionEvent);
+    }
+
+    public void processDeleteQuizQuestionEvent(Integer aggregateId, DeleteQuestionEvent deleteQuestionEvent) {
+        logger.info("Processing DeleteQuizQuestionEvent: aggregateId={}, event={}", aggregateId, deleteQuestionEvent);
+        executionFunctionalities.removeQuizQuestion(aggregateId, deleteQuestionEvent);
+    }
+
+    /* TOPIC_EXISTS (merged from Tournament) */
+
+    public void processUpdateTopicEvent(Integer aggregateId, UpdateTopicEvent updateTopicEvent) {
+        logger.info("Processing UpdateTopicEvent: aggregateId={}, event={}", aggregateId, updateTopicEvent);
+        executionFunctionalities.updateTopicInTournaments(aggregateId, updateTopicEvent);
+    }
+
+    public void processDeleteTopicEvent(Integer aggregateId, DeleteTopicEvent deleteTopicEvent) {
+        logger.info("Processing DeleteTopicEvent: aggregateId={}, event={}", aggregateId, deleteTopicEvent);
+        executionFunctionalities.deleteTopicInTournaments(aggregateId, deleteTopicEvent);
+    }
+}

@@ -1,0 +1,24 @@
+package org.anonymous.msrefactor.quizzes.commands.tournament;
+
+import org.anonymous.msrefactor.ms.messaging.Command;
+import org.anonymous.msrefactor.ms.transaction.unitOfWork.UnitOfWork;
+
+public class LeaveTournamentCommand extends Command {
+    private final Integer tournamentAggregateId;
+    private final Integer userAggregateId;
+
+    public LeaveTournamentCommand(UnitOfWork unitOfWork, String serviceName, Integer tournamentAggregateId,
+            Integer userAggregateId) {
+        super(unitOfWork, serviceName, tournamentAggregateId);
+        this.tournamentAggregateId = tournamentAggregateId;
+        this.userAggregateId = userAggregateId;
+    }
+
+    public Integer getTournamentAggregateId() {
+        return tournamentAggregateId;
+    }
+
+    public Integer getUserAggregateId() {
+        return userAggregateId;
+    }
+}

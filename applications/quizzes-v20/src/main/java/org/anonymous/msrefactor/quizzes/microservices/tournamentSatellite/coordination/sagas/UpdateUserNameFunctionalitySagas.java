@@ -1,0 +1,85 @@
+package org.anonymous.msrefactor.quizzes.microservices.tournamentSatellite.coordination.sagas;
+
+import org.anonymous.msrefactor.ms.coordination.WorkflowFunctionality;
+import org.anonymous.msrefactor.ms.messaging.Command;
+import org.anonymous.msrefactor.ms.messaging.CommandGateway;
+import org.anonymous.msrefactor.ms.transaction.sagas.aggregate.GenericSagaState;
+import org.anonymous.msrefactor.ms.transaction.sagas.messaging.SagaCommand;
+import org.anonymous.msrefactor.ms.transaction.sagas.unitOfWork.SagaUnitOfWork;
+import org.anonymous.msrefactor.ms.transaction.sagas.unitOfWork.SagaUnitOfWorkService;
+import org.anonymous.msrefactor.ms.transaction.sagas.workflow.SagaStep;
+import org.anonymous.msrefactor.ms.transaction.sagas.workflow.SagaWorkflow;
+import org.anonymous.msrefactor.quizzes.ServiceMapping;
+import org.anonymous.msrefactor.quizzes.commands.tournamentSatellite.GetTournamentSatelliteByIdCommand;
+import org.anonymous.msrefactor.quizzes.commands.tournamentSatellite.UpdateUserNameCommand;
+import org.anonymous.msrefactor.quizzes.microservices.tournamentSatellite.aggregate.TournamentSatelliteDto;
+import org.anonymous.msrefactor.quizzes.microservices.tournamentSatellite.aggregate.sagas.states.TournamentSatelliteSagaState;
+import org.anonymous.msrefactor.quizzes.microservices.user.aggregate.UserDto;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+
+public class UpdateUserNameFunctionalitySagas extends WorkflowFunctionality {
+    private TournamentSatelliteDto tournamentSatellite;
+    private UserDto participant;
+    private final String name;
+    private final CommandGateway commandGateway;
+    private final Long eventVersion;
+    private final Integer executionAggregateId;
+    private final SagaUnitOfWorkService unitOfWorkService;
+
+    public UpdateUserNameFunctionalitySagas(SagaUnitOfWorkService unitOfWorkService, Long eventVersion, Integer satelliteAggregateId,
+                                            Integer executionAggregateId, Integer userAggregateId, SagaUnitOfWork unitOfWork, String name,
+                                            CommandGateway commandGateway) {
+        this.unitOfWorkService = unitOfWorkService;
+        this.eventVersion = eventVersion;
+        this.executionAggregateId = executionAggregateId;
+        this.name = name;
+        this.commandGateway = commandGateway;
+        this.buildWorkflow(satelliteAggregateId, userAggregateId, unitOfWork);
+    }
+
+    public void buildWorkflow(Integer satelliteAggregateId, Integer userAggregateId, SagaUnitOfWork unitOfWork) {
+        this.workflow = new SagaWorkflow(this, unitOfWorkService, unitOfWork);
+
+        SagaStep getSatelliteStep = new SagaStep("getSatelliteStep", () -> {
+            GetTournamentSatelliteByIdCommand getCommand = new GetTournamentSatelliteByIdCommand(unitOfWork, ServiceMapping.TOURNAMENT_SATELLITE.getServiceName(), satelliteAggregateId);
+            SagaCommand sagaCommand = new SagaCommand(getCommand);
+            sagaCommand.setSemanticLock(TournamentSatelliteSagaState.READ_SATELLITE);
+            this.tournamentSatellite = (TournamentSatelliteDto) commandGateway.send(sagaCommand);
+        });
+
+        getSatelliteStep.registerCompensation(() -> {
+            Command command = new Command(unitOfWork, ServiceMapping.TOURNAMENT_SATELLITE.getServiceName(), satelliteAggregateId);
+            SagaCommand sagaCommand = new SagaCommand(command);
+            sagaCommand.setSemanticLock(GenericSagaState.NOT_IN_SAGA);
+            commandGateway.send(sagaCommand);
+        }, unitOfWork);
+
+        // the participant branch moved to TournamentSatelliteSatellite with the
+        // roster split; this workflow now only renames the creator replica
+        SagaStep updateCreatorNameStep = new SagaStep("updateCreatorNameStep", () -> {
+            UpdateUserNameCommand updateUserNameCommand = new UpdateUserNameCommand(unitOfWork, ServiceMapping.TOURNAMENT_SATELLITE.getServiceName(), satelliteAggregateId, executionAggregateId, eventVersion, userAggregateId, name);
+            commandGateway.send(updateUserNameCommand);
+        }, new ArrayList<>(Arrays.asList(getSatelliteStep)));
+
+        this.workflow.addStep(getSatelliteStep);
+        this.workflow.addStep(updateCreatorNameStep);
+    }
+
+    public TournamentSatelliteDto getTournamentSatellite() {
+        return tournamentSatellite;
+    }
+
+    public void setTournamentSatellite(TournamentSatelliteDto tournamentSatellite) {
+        this.tournamentSatellite = tournamentSatellite;
+    }
+
+    public void setParticipant(UserDto participant) {
+        this.participant = participant;
+    }
+
+    public UserDto getParticipant() {
+        return this.participant;
+    }
+}
